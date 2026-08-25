@@ -1,0 +1,79 @@
+version: "3.9"
+
+# Portainer-Stack fuer TradingAgents-API.
+#
+# Sicherheitslayout:
+# - Netz "tradingagents_internal" ist NICHT extern erreichbar (internal: true).
+# - Kein Port-Publishing (keine "ports:"-Direktive) -> nur andere Container
+#   im selben Docker-Netz koennen die API erreichen (z. B. dein MCP-Container).
+# - Falls du testweise per Host-Browser draufschauen willst, nutze den
+#   separaten Test-Weg unten (docker exec / temporaerer Port), nicht dauerhaft.
+# - read_only Root-Filesystem, no-new-privileges, capabilities gedroppt.
+# - Secrets ueber Portainer-Stack-Umgebungsvariablen oder Docker Secrets,
+#   niemals im Klartext ins Repo/Compose committen.
+
+services:
+  tradingagents-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+      args:
+        TRADINGAGENTS_REF: v0.3.1
+    image: tradingagents-api:local
+    container_name: tradingagents-api
+    restart: unless-stopped
+
+    environment:
+      TRADINGAGENTS_API_KEY: ${TRADINGAGENTS_API_KEY}
+      TRADINGAGENTS_TICKER_ALLOWLIST: ${TRADINGAGENTS_TICKER_ALLOWLIST:-AAPL,MSFT,NVDA,BTC-USD,ETH-USD}
+      TRADINGAGENTS_MAX_CONCURRENCY: ${TRADINGAGENTS_MAX_CONCURRENCY:-1}
+      TRADINGAGENTS_LLM_PROVIDER: ${TRADINGAGENTS_LLM_PROVIDER:-openai}
+      TRADINGAGENTS_DEEP_THINK_LLM: ${TRADINGAGENTS_DEEP_THINK_LLM:-gpt-5.5}
+      TRADINGAGENTS_QUICK_THINK_LLM: ${TRADINGAGENTS_QUICK_THINK_LLM:-gpt-5.4-mini}
+      TRADINGAGENTS_MAX_DEBATE_ROUNDS: ${TRADINGAGENTS_MAX_DEBATE_ROUNDS:-1}
+      TRADINGAGENTS_MAX_RISK_ROUNDS: ${TRADINGAGENTS_MAX_RISK_ROUNDS:-1}
+      TRADINGAGENTS_TEMPERATURE: ${TRADINGAGENTS_TEMPERATURE:-0}
+      TRADINGAGENTS_CHECKPOINT_ENABLED: ${TRADINGAGENTS_CHECKPOINT_ENABLED:-true}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:-}
+      ALPHA_VANTAGE_API_KEY: ${ALPHA_VANTAGE_API_KEY:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+
+    volumes:
+      - tradingagents_data:/home/appuser/.tradingagents
+
+    networks:
+      - tradingagents_internal
+
+    expose:
+      - "8000"
+
+    read_only: true
+    tmpfs:
+      - /tmp
+
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  tradingagents_data:
+
+networks:
+  tradingagents_internal:
+    internal: true

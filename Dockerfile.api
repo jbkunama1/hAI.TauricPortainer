@@ -1,0 +1,60 @@
+# syntax=docker/dockerfile:1
+# Baut die TradingAgents-API auf Basis des offiziellen Upstream-Repos.
+# Zweistufiger Build, non-root Runtime, kein Compiler im finalen Image.
+
+FROM python:3.12-slim AS builder
+
+WORKDIR /build
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y git build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Feste Version statt "main" empfohlen, sobald ihr einen Tag/Release fixiert.
+ARG TRADINGAGENTS_REF=v0.3.1
+RUN git clone --depth 1 --branch ${TRADINGAGENTS_REF} \
+    https://github.com/TauricResearch/TradingAgents.git /build/app
+
+WORKDIR /build/app
+
+RUN python -m pip install --no-cache-dir --upgrade pip \
+    && python -m pip install --no-cache-dir --prefix=/install . \
+    && python -m pip install --no-cache-dir --prefix=/install fastapi "uvicorn[standard]"
+
+FROM python:3.12-slim AS runtime
+
+LABEL org.opencontainers.image.title="tradingagents-api" \
+      org.opencontainers.image.description="Interner FastAPI-Wrapper fuer TradingAgents" \
+      org.opencontainers.image.licenses="Apache-2.0"
+
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y tini \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN useradd --create-home --uid 10001 --shell /usr/sbin/nologin appuser \
+    && mkdir -p /home/appuser/.tradingagents/logs \
+               /home/appuser/.tradingagents/cache \
+               /home/appuser/.tradingagents/memory \
+    && chown -R appuser:appuser /home/appuser
+
+COPY --from=builder /install /usr/local
+COPY --from=builder /build/app/tradingagents /app/tradingagents
+COPY api.py /app/api.py
+
+WORKDIR /app
+
+RUN chown -R appuser:appuser /app
+
+USER appuser
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HOME=/home/appuser
+
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)" || exit 1
+
+ENTRYPOINT ["tini", "--"]
+CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-server-header"]
